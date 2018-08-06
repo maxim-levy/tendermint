@@ -19,8 +19,8 @@ build-all: check_tools
 	rm -rf ./dist
 	gox -verbose \
 		-ldflags "-s -w" \
-		-arch="amd64 386 arm arm64" \
-		-os="linux darwin windows freebsd" \
+		-arch="amd64" \
+		-os="linux" \
 		-osarch="!darwin/arm !darwin/arm64" \
 		-output="dist/{{.OS}}-{{.Arch}}/{{.Dir}}" .
 

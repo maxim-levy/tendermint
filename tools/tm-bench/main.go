@@ -14,7 +14,8 @@ import (
 	tmrpc "github.com/tendermint/tendermint/rpc/client"
 )
 
-var logger = log.NewNopLogger()
+//var logger = log.NewNopLogger()
+var logger = log.NewTMLogger(log.NewSyncWriter(os.Stdout))
 
 func main() {
 	var durationInt, txsRate, connections, txSize int

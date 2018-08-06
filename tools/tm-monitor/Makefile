@@ -48,9 +48,8 @@ build-all: check_tools
 	rm -rf ./dist
 	gox -verbose \
 		-ldflags "-s -w" \
-		-arch="amd64 386 arm arm64" \
-		-os="linux darwin windows freebsd" \
-		-osarch="!darwin/arm !darwin/arm64" \
+		-arch="amd64" \
+		-os="linux" \
 		-output="dist/{{.OS}}-{{.Arch}}/{{.Dir}}" .
 
 dist: build-all
