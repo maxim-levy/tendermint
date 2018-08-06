@@ -4,14 +4,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/stretchr/testify/assert"
-	"github.com/tendermint/tendermint/p2p"
+
 	cmn "github.com/tendermint/tendermint/libs/common"
 	"github.com/tendermint/tendermint/libs/log"
+	"github.com/tendermint/tendermint/p2p"
 )
 
 func createTempFileName(prefix string) string {
@@ -202,12 +204,12 @@ func randNetAddressPairs(t *testing.T, n int) []netAddressPair {
 func randIPv4Address(t *testing.T) *p2p.NetAddress {
 	for {
 		ip := fmt.Sprintf("%v.%v.%v.%v",
-			rand.Intn(254)+1,
-			rand.Intn(255),
-			rand.Intn(255),
-			rand.Intn(255),
+			cmn.RandIntn(254)+1,
+			cmn.RandIntn(255),
+			cmn.RandIntn(255),
+			cmn.RandIntn(255),
 		)
-		port := rand.Intn(65535-1) + 1
+		port := cmn.RandIntn(65535-1) + 1
 		id := p2p.ID(hex.EncodeToString(cmn.RandBytes(p2p.IDByteLength)))
 		idAddr := p2p.IDAddressString(id, fmt.Sprintf("%v:%v", ip, port))
 		addr, err := p2p.NewNetAddressString(idAddr)
@@ -353,4 +355,65 @@ func TestAddrBookHasAddress(t *testing.T) {
 	book.RemoveAddress(addr)
 
 	assert.False(t, book.HasAddress(addr))
+}
+
+func testCreatePrivateAddrs(t *testing.T, numAddrs int) ([]*p2p.NetAddress, []string) {
+	addrs := make([]*p2p.NetAddress, numAddrs)
+	for i := 0; i < numAddrs; i++ {
+		addrs[i] = randIPv4Address(t)
+	}
+
+	private := make([]string, numAddrs)
+	for i, addr := range addrs {
+		private[i] = string(addr.ID)
+	}
+	return addrs, private
+}
+
+func TestAddrBookEmpty(t *testing.T) {
+	fname := createTempFileName("addrbook_test")
+	defer deleteTempFile(fname)
+
+	book := NewAddrBook(fname, true)
+	book.SetLogger(log.TestingLogger())
+	// Check that empty book is empty
+	require.True(t, book.Empty())
+	// Check that book with our address is empty
+	book.AddOurAddress(randIPv4Address(t))
+	require.True(t, book.Empty())
+	// Check that book with private addrs is empty
+	_, privateIds := testCreatePrivateAddrs(t, 5)
+	book.AddPrivateIDs(privateIds)
+	require.True(t, book.Empty())
+
+	// Check that book with address is not empty
+	book.AddAddress(randIPv4Address(t), randIPv4Address(t))
+	require.False(t, book.Empty())
+}
+
+func TestPrivatePeers(t *testing.T) {
+	fname := createTempFileName("addrbook_test")
+	defer deleteTempFile(fname)
+
+	book := NewAddrBook(fname, true)
+	book.SetLogger(log.TestingLogger())
+
+	addrs, private := testCreatePrivateAddrs(t, 10)
+	book.AddPrivateIDs(private)
+
+	// private addrs must not be added
+	for _, addr := range addrs {
+		err := book.AddAddress(addr, addr)
+		if assert.Error(t, err) {
+			_, ok := err.(ErrAddrBookPrivate)
+			assert.True(t, ok)
+		}
+	}
+
+	// addrs coming from private peers must not be added
+	err := book.AddAddress(randIPv4Address(t), addrs[0])
+	if assert.Error(t, err) {
+		_, ok := err.(ErrAddrBookPrivateSrc)
+		assert.True(t, ok)
+	}
 }

@@ -6,12 +6,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	abci "github.com/tendermint/tendermint/abci/types"
-	crypto "github.com/tendermint/tendermint/crypto"
+	"github.com/tendermint/tendermint/crypto"
+	"github.com/tendermint/tendermint/crypto/ed25519"
+	"github.com/tendermint/tendermint/crypto/secp256k1"
 )
 
 func TestABCIPubKey(t *testing.T) {
-	pkEd := crypto.GenPrivKeyEd25519().PubKey()
-	pkSecp := crypto.GenPrivKeySecp256k1().PubKey()
+	pkEd := ed25519.GenPrivKey().PubKey()
+	pkSecp := secp256k1.GenPrivKey().PubKey()
 	testABCIPubKey(t, pkEd, ABCIPubKeyTypeEd25519)
 	testABCIPubKey(t, pkSecp, ABCIPubKeyTypeSecp256k1)
 }
@@ -24,7 +26,7 @@ func testABCIPubKey(t *testing.T, pk crypto.PubKey, typeStr string) {
 }
 
 func TestABCIValidators(t *testing.T) {
-	pkEd := crypto.GenPrivKeyEd25519().PubKey()
+	pkEd := ed25519.GenPrivKey().PubKey()
 
 	// correct validator
 	tmValExpected := &Validator{
@@ -100,21 +102,42 @@ func TestABCIEvidence(t *testing.T) {
 	)
 
 	assert.Equal(t, "duplicate/vote", abciEv.Type)
+
+	// test we do not send pubkeys
+	assert.Empty(t, abciEv.Validator.PubKey)
 }
 
 type pubKeyEddie struct{}
 
 func (pubKeyEddie) Address() Address                                  { return []byte{} }
 func (pubKeyEddie) Bytes() []byte                                     { return []byte{} }
-func (pubKeyEddie) VerifyBytes(msg []byte, sig crypto.Signature) bool { return false }
+func (pubKeyEddie) VerifyBytes(msg []byte, sig []byte) bool { return false }
 func (pubKeyEddie) Equals(crypto.PubKey) bool                         { return false }
 
 func TestABCIValidatorFromPubKeyAndPower(t *testing.T) {
-	pubkey := crypto.GenPrivKeyEd25519().PubKey()
+	pubkey := ed25519.GenPrivKey().PubKey()
 
 	abciVal := TM2PB.ValidatorFromPubKeyAndPower(pubkey, 10)
 	assert.Equal(t, int64(10), abciVal.Power)
 
 	assert.Panics(t, func() { TM2PB.ValidatorFromPubKeyAndPower(nil, 10) })
 	assert.Panics(t, func() { TM2PB.ValidatorFromPubKeyAndPower(pubKeyEddie{}, 10) })
+}
+
+func TestABCIValidatorWithoutPubKey(t *testing.T) {
+	pkEd := ed25519.GenPrivKey().PubKey()
+
+	abciVal := TM2PB.ValidatorWithoutPubKey(&Validator{
+		Address:     pkEd.Address(),
+		PubKey:      pkEd,
+		VotingPower: 10,
+	})
+
+	// pubkey must be nil
+	tmValExpected := abci.Validator{
+		Address: pkEd.Address(),
+		Power:   10,
+	}
+
+	assert.Equal(t, tmValExpected, abciVal)
 }

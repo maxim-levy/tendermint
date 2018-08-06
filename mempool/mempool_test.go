@@ -38,7 +38,7 @@ func newMempoolWithApp(cc proxy.ClientCreator) *Mempool {
 	return mempool
 }
 
-func ensureNoFire(t *testing.T, ch <-chan int64, timeoutMS int) {
+func ensureNoFire(t *testing.T, ch <-chan struct{}, timeoutMS int) {
 	timer := time.NewTimer(time.Duration(timeoutMS) * time.Millisecond)
 	select {
 	case <-ch:
@@ -47,7 +47,7 @@ func ensureNoFire(t *testing.T, ch <-chan int64, timeoutMS int) {
 	}
 }
 
-func ensureFire(t *testing.T, ch <-chan int64, timeoutMS int) {
+func ensureFire(t *testing.T, ch <-chan struct{}, timeoutMS int) {
 	timer := time.NewTimer(time.Duration(timeoutMS) * time.Millisecond)
 	select {
 	case <-ch:
@@ -117,7 +117,7 @@ func TestTxsAvailable(t *testing.T) {
 
 func TestSerialReap(t *testing.T) {
 	app := counter.NewCounterApplication(true)
-	app.SetOption(abci.RequestSetOption{"serial", "on"})
+	app.SetOption(abci.RequestSetOption{Key: "serial", Value: "on"})
 	cc := proxy.NewLocalClientCreator(app)
 
 	mempool := newMempoolWithApp(cc)

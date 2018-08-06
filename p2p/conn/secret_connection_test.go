@@ -1,13 +1,21 @@
 package conn
 
 import (
+	"bufio"
+	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	crypto "github.com/tendermint/tendermint/crypto"
+	"github.com/tendermint/tendermint/crypto/ed25519"
 	cmn "github.com/tendermint/tendermint/libs/common"
 )
 
@@ -35,9 +43,9 @@ func makeKVStoreConnPair() (fooConn, barConn kvstoreConn) {
 func makeSecretConnPair(tb testing.TB) (fooSecConn, barSecConn *SecretConnection) {
 
 	var fooConn, barConn = makeKVStoreConnPair()
-	var fooPrvKey = crypto.GenPrivKeyEd25519()
+	var fooPrvKey = ed25519.GenPrivKey()
 	var fooPubKey = fooPrvKey.PubKey()
-	var barPrvKey = crypto.GenPrivKeyEd25519()
+	var barPrvKey = ed25519.GenPrivKey()
 	var barPubKey = barPrvKey.PubKey()
 
 	// Make connections from both sides in parallel.
@@ -105,7 +113,7 @@ func TestSecretConnectionReadWrite(t *testing.T) {
 	genNodeRunner := func(id string, nodeConn kvstoreConn, nodeWrites []string, nodeReads *[]string) cmn.Task {
 		return func(_ int) (interface{}, error, bool) {
 			// Initiate cryptographic private key and secret connection trhough nodeConn.
-			nodePrvKey := crypto.GenPrivKeyEd25519()
+			nodePrvKey := ed25519.GenPrivKey()
 			nodeSecretConn, err := MakeSecretConnection(nodeConn, nodePrvKey)
 			if err != nil {
 				t.Errorf("Failed to establish SecretConnection for node: %v", err)
@@ -206,6 +214,66 @@ func TestSecretConnectionReadWrite(t *testing.T) {
 	compareWritesReads(fooWrites, barReads)
 	compareWritesReads(barWrites, fooReads)
 
+}
+
+// Run go test -update from within this module
+// to update the golden test vector file
+var update = flag.Bool("update", false, "update .golden files")
+
+func TestDeriveSecretsAndChallengeGolden(t *testing.T) {
+	goldenFilepath := filepath.Join("testdata", t.Name()+".golden")
+	if *update {
+		t.Logf("Updating golden test vector file %s", goldenFilepath)
+		data := createGoldenTestVectors(t)
+		cmn.WriteFile(goldenFilepath, []byte(data), 0644)
+	}
+	f, err := os.Open(goldenFilepath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		params := strings.Split(line, ",")
+		randSecretVector, err := hex.DecodeString(params[0])
+		require.Nil(t, err)
+		randSecret := new([32]byte)
+		copy((*randSecret)[:], randSecretVector)
+		locIsLeast, err := strconv.ParseBool(params[1])
+		require.Nil(t, err)
+		expectedRecvSecret, err := hex.DecodeString(params[2])
+		require.Nil(t, err)
+		expectedSendSecret, err := hex.DecodeString(params[3])
+		require.Nil(t, err)
+		expectedChallenge, err := hex.DecodeString(params[4])
+		require.Nil(t, err)
+
+		recvSecret, sendSecret, challenge := deriveSecretAndChallenge(randSecret, locIsLeast)
+		require.Equal(t, expectedRecvSecret, (*recvSecret)[:], "Recv Secrets aren't equal")
+		require.Equal(t, expectedSendSecret, (*sendSecret)[:], "Send Secrets aren't equal")
+		require.Equal(t, expectedChallenge, (*challenge)[:], "challenges aren't equal")
+	}
+}
+
+// Creates the data for a test vector file.
+// The file format is:
+// Hex(diffie_hellman_secret), loc_is_least, Hex(recvSecret), Hex(sendSecret), Hex(challenge)
+func createGoldenTestVectors(t *testing.T) string {
+	data := ""
+	for i := 0; i < 32; i++ {
+		randSecretVector := cmn.RandBytes(32)
+		randSecret := new([32]byte)
+		copy((*randSecret)[:], randSecretVector)
+		data += hex.EncodeToString((*randSecret)[:]) + ","
+		locIsLeast := cmn.RandBool()
+		data += strconv.FormatBool(locIsLeast) + ","
+		recvSecret, sendSecret, challenge := deriveSecretAndChallenge(randSecret, locIsLeast)
+		data += hex.EncodeToString((*recvSecret)[:]) + ","
+		data += hex.EncodeToString((*sendSecret)[:]) + ","
+		data += hex.EncodeToString((*challenge)[:]) + "\n"
+	}
+	return data
 }
 
 func BenchmarkSecretConnection(b *testing.B) {

@@ -3,29 +3,30 @@ package privval
 import (
 	"encoding/base64"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tendermint/tendermint/crypto"
+	"github.com/tendermint/tendermint/crypto/ed25519"
 	"github.com/tendermint/tendermint/types"
-	cmn "github.com/tendermint/tendermint/libs/common"
 )
 
 func TestGenLoadValidator(t *testing.T) {
 	assert := assert.New(t)
 
-	_, tempFilePath := cmn.Tempfile("priv_validator_")
-	privVal := GenFilePV(tempFilePath)
+	tempFile, err := ioutil.TempFile("", "priv_validator_")
+	require.Nil(t, err)
+	privVal := GenFilePV(tempFile.Name())
 
 	height := int64(100)
 	privVal.LastHeight = height
 	privVal.Save()
 	addr := privVal.GetAddress()
 
-	privVal = LoadFilePV(tempFilePath)
+	privVal = LoadFilePV(tempFile.Name())
 	assert.Equal(addr, privVal.GetAddress(), "expected privval addr to be the same")
 	assert.Equal(height, privVal.LastHeight, "expected privval.LastHeight to have been saved")
 }
@@ -33,7 +34,9 @@ func TestGenLoadValidator(t *testing.T) {
 func TestLoadOrGenValidator(t *testing.T) {
 	assert := assert.New(t)
 
-	_, tempFilePath := cmn.Tempfile("priv_validator_")
+	tempFile, err := ioutil.TempFile("", "priv_validator_")
+	require.Nil(t, err)
+	tempFilePath := tempFile.Name()
 	if err := os.Remove(tempFilePath); err != nil {
 		t.Error(err)
 	}
@@ -47,10 +50,10 @@ func TestUnmarshalValidator(t *testing.T) {
 	assert, require := assert.New(t), require.New(t)
 
 	// create some fixed values
-	privKey := crypto.GenPrivKeyEd25519()
+	privKey := ed25519.GenPrivKey()
 	pubKey := privKey.PubKey()
 	addr := pubKey.Address()
-	pubArray := [32]byte(pubKey.(crypto.PubKeyEd25519))
+	pubArray := [32]byte(pubKey.(ed25519.PubKeyEd25519))
 	pubBytes := pubArray[:]
 	privArray := [64]byte(privKey)
 	privBytes := privArray[:]
@@ -90,8 +93,9 @@ func TestUnmarshalValidator(t *testing.T) {
 func TestSignVote(t *testing.T) {
 	assert := assert.New(t)
 
-	_, tempFilePath := cmn.Tempfile("priv_validator_")
-	privVal := GenFilePV(tempFilePath)
+	tempFile, err := ioutil.TempFile("", "priv_validator_")
+	require.Nil(t, err)
+	privVal := GenFilePV(tempFile.Name())
 
 	block1 := types.BlockID{[]byte{1, 2, 3}, types.PartSetHeader{}}
 	block2 := types.BlockID{[]byte{3, 2, 1}, types.PartSetHeader{}}
@@ -100,7 +104,7 @@ func TestSignVote(t *testing.T) {
 
 	// sign a vote for first time
 	vote := newVote(privVal.Address, 0, height, round, voteType, block1)
-	err := privVal.SignVote("mychainid", vote)
+	err = privVal.SignVote("mychainid", vote)
 	assert.NoError(err, "expected no error signing vote")
 
 	// try to sign the same vote again; should be fine
@@ -131,8 +135,9 @@ func TestSignVote(t *testing.T) {
 func TestSignProposal(t *testing.T) {
 	assert := assert.New(t)
 
-	_, tempFilePath := cmn.Tempfile("priv_validator_")
-	privVal := GenFilePV(tempFilePath)
+	tempFile, err := ioutil.TempFile("", "priv_validator_")
+	require.Nil(t, err)
+	privVal := GenFilePV(tempFile.Name())
 
 	block1 := types.PartSetHeader{5, []byte{1, 2, 3}}
 	block2 := types.PartSetHeader{10, []byte{3, 2, 1}}
@@ -140,7 +145,7 @@ func TestSignProposal(t *testing.T) {
 
 	// sign a proposal for first time
 	proposal := newProposal(height, round, block1)
-	err := privVal.SignProposal("mychainid", proposal)
+	err = privVal.SignProposal("mychainid", proposal)
 	assert.NoError(err, "expected no error signing proposal")
 
 	// try to sign the same proposal again; should be fine
@@ -169,8 +174,9 @@ func TestSignProposal(t *testing.T) {
 }
 
 func TestDifferByTimestamp(t *testing.T) {
-	_, tempFilePath := cmn.Tempfile("priv_validator_")
-	privVal := GenFilePV(tempFilePath)
+	tempFile, err := ioutil.TempFile("", "priv_validator_")
+	require.Nil(t, err)
+	privVal := GenFilePV(tempFile.Name())
 
 	block1 := types.PartSetHeader{5, []byte{1, 2, 3}}
 	height, round := int64(10), 1
@@ -183,11 +189,11 @@ func TestDifferByTimestamp(t *testing.T) {
 		assert.NoError(t, err, "expected no error signing proposal")
 		signBytes := proposal.SignBytes(chainID)
 		sig := proposal.Signature
-		timeStamp := clipToMS(proposal.Timestamp)
+		timeStamp := proposal.Timestamp
 
 		// manipulate the timestamp. should get changed back
 		proposal.Timestamp = proposal.Timestamp.Add(time.Millisecond)
-		var emptySig crypto.Signature
+		var emptySig []byte
 		proposal.Signature = emptySig
 		err = privVal.SignProposal("mychainid", proposal)
 		assert.NoError(t, err, "expected no error on signing same proposal")
@@ -207,11 +213,11 @@ func TestDifferByTimestamp(t *testing.T) {
 
 		signBytes := vote.SignBytes(chainID)
 		sig := vote.Signature
-		timeStamp := clipToMS(vote.Timestamp)
+		timeStamp := vote.Timestamp
 
 		// manipulate the timestamp. should get changed back
 		vote.Timestamp = vote.Timestamp.Add(time.Millisecond)
-		var emptySig crypto.Signature
+		var emptySig []byte
 		vote.Signature = emptySig
 		err = privVal.SignVote("mychainid", vote)
 		assert.NoError(t, err, "expected no error on signing same vote")
@@ -241,11 +247,4 @@ func newProposal(height int64, round int, partsHeader types.PartSetHeader) *type
 		BlockPartsHeader: partsHeader,
 		Timestamp:        time.Now().UTC(),
 	}
-}
-
-func clipToMS(t time.Time) time.Time {
-	nano := t.UnixNano()
-	million := int64(1000000)
-	nano = (nano / million) * million
-	return time.Unix(0, nano).UTC()
 }

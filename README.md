@@ -22,7 +22,7 @@ develop   | [![CircleCI](https://circleci.com/gh/tendermint/tendermint/tree/deve
 Tendermint Core is Byzantine Fault Tolerant (BFT) middleware that takes a state transition machine - written in any programming language -
 and securely replicates it on many machines.
 
-For protocol details, see [the specification](/docs/spec).
+For protocol details, see [the specification](/docs/spec). For a consensus proof and detailed protocol analysis checkout our recent paper, "[The latest gossip on BFT consensus](https://arxiv.org/abs/1807.04938)".
 
 ## A Note on Production Readiness
 
@@ -50,13 +50,13 @@ Go version | Go1.9 or higher
 
 ## Install
 
-See the [install instructions](/docs/install.md)
+See the [install instructions](/docs/introduction/install.md)
 
 ## Quick Start
 
 - [Single node](/docs/using-tendermint.md)
 - [Local cluster using docker-compose](/networks/local)
-- [Remote cluster using terraform and ansible](/docs/terraform-and-ansible.md)
+- [Remote cluster using terraform and ansible](/docs/networks/terraform-and-ansible.md)
 - [Join the public testnet](https://cosmos.network/testnet)
 
 ## Resources
