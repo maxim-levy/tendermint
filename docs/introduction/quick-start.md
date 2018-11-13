@@ -1,4 +1,4 @@
-# Tendermint
+# Quick Start
 
 ## Overview
 
@@ -9,42 +9,21 @@ works and want to get started right away, continue.
 
 ### Quick Install
 
-On a fresh Ubuntu 16.04 machine can be done with [this script](https://git.io/fFfOR), like so:
+To quickly get Tendermint installed on a fresh
+Ubuntu 16.04 machine, use [this script](https://git.io/fFfOR).
+
+WARNING: do not run this on your local machine.
 
 ```
 curl -L https://git.io/fFfOR | bash
 source ~/.profile
 ```
 
-WARNING: do not run the above on your local machine.
-
 The script is also used to facilitate cluster deployment below.
 
 ### Manual Install
 
-Requires:
-
-- `go` minimum version 1.10
-- `$GOPATH` environment variable must be set
-- `$GOPATH/bin` must be on your `$PATH` (see https://github.com/tendermint/tendermint/wiki/Setting-GOPATH)
-
-To install Tendermint, run:
-
-```
-go get github.com/tendermint/tendermint
-cd $GOPATH/src/github.com/tendermint/tendermint
-make get_tools && make get_vendor_deps
-make install
-```
-
-Note that `go get` may return an error but it can be ignored.
-
-Confirm installation:
-
-```
-$ tendermint version
-0.23.0-dev
-```
+For manual installation, see the [install instructions](install.md)
 
 ## Initialization
 
@@ -142,8 +121,6 @@ tendermint node --home ./mytestnet/node3 --proxy_app=kvstore --p2p.persistent_pe
 
 Note that after the third node is started, blocks will start to stream in
 because >2/3 of validators (defined in the `genesis.json`) have come online.
-Seeds can also be specified in the `config.toml`. See [this
-PR](https://github.com/tendermint/tendermint/pull/792) for more information
-about configuration options.
+Seeds can also be specified in the `config.toml`. See [here](../tendermint-core/configuration.md) for more information about configuration options.
 
 Transactions can then be sent as covered in the single, local node example above.

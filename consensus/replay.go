@@ -11,6 +11,7 @@ import (
 	"time"
 
 	abci "github.com/tendermint/tendermint/abci/types"
+	"github.com/tendermint/tendermint/version"
 	//auto "github.com/tendermint/tendermint/libs/autofile"
 	cmn "github.com/tendermint/tendermint/libs/common"
 	dbm "github.com/tendermint/tendermint/libs/db"
@@ -19,7 +20,6 @@ import (
 	"github.com/tendermint/tendermint/proxy"
 	sm "github.com/tendermint/tendermint/state"
 	"github.com/tendermint/tendermint/types"
-	"github.com/tendermint/tendermint/version"
 )
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli)
@@ -73,7 +73,7 @@ func (cs *ConsensusState) readReplayMessage(msg *TimedWALMessage, newStepCh chan
 		case *ProposalMessage:
 			p := msg.Proposal
 			cs.Logger.Info("Replay: Proposal", "height", p.Height, "round", p.Round, "header",
-				p.BlockPartsHeader, "pol", p.POLRound, "peer", peerID)
+				p.BlockID.PartsHeader, "pol", p.POLRound, "peer", peerID)
 		case *BlockPartMessage:
 			cs.Logger.Info("Replay: BlockPart", "height", msg.Height, "round", msg.Round, "peer", peerID)
 		case *VoteMessage:
@@ -227,7 +227,7 @@ func (h *Handshaker) NBlocks() int {
 func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 
 	// Handshake is done via ABCI Info on the query conn.
-	res, err := proxyApp.Query().InfoSync(abci.RequestInfo{Version: version.Version})
+	res, err := proxyApp.Query().InfoSync(proxy.RequestInfo)
 	if err != nil {
 		return fmt.Errorf("Error calling Info: %v", err)
 	}
@@ -238,9 +238,15 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 	}
 	appHash := res.LastBlockAppHash
 
-	h.logger.Info("ABCI Handshake", "appHeight", blockHeight, "appHash", fmt.Sprintf("%X", appHash))
+	h.logger.Info("ABCI Handshake App Info",
+		"height", blockHeight,
+		"hash", fmt.Sprintf("%X", appHash),
+		"software-version", res.Version,
+		"protocol-version", res.AppVersion,
+	)
 
-	// TODO: check app version.
+	// Set AppVersion on the state.
+	h.initialState.Version.Consensus.App = version.Protocol(res.AppVersion)
 
 	// Replay blocks up to the latest in the blockstore.
 	_, err = h.ReplayBlocks(h.initialState, appHash, blockHeight, proxyApp)
@@ -258,21 +264,25 @@ func (h *Handshaker) Handshake(proxyApp proxy.AppConns) error {
 
 // Replay all blocks since appBlockHeight and ensure the result matches the current state.
 // Returns the final AppHash or an error.
-func (h *Handshaker) ReplayBlocks(state sm.State, appHash []byte, appBlockHeight int64, proxyApp proxy.AppConns) ([]byte, error) {
-
+func (h *Handshaker) ReplayBlocks(
+	state sm.State,
+	appHash []byte,
+	appBlockHeight int64,
+	proxyApp proxy.AppConns,
+) ([]byte, error) {
 	storeBlockHeight := h.store.Height()
 	stateBlockHeight := state.LastBlockHeight
 	h.logger.Info("ABCI Replay Blocks", "appHeight", appBlockHeight, "storeHeight", storeBlockHeight, "stateHeight", stateBlockHeight)
 
-	// If appBlockHeight == 0 it means that we are at genesis and hence should send InitChain
+	// If appBlockHeight == 0 it means that we are at genesis and hence should send InitChain.
 	if appBlockHeight == 0 {
-		validators := types.TM2PB.Validators(state.Validators)
+		nextVals := types.TM2PB.ValidatorUpdates(state.NextValidators) // state.Validators would work too.
 		csParams := types.TM2PB.ConsensusParams(h.genDoc.ConsensusParams)
 		req := abci.RequestInitChain{
 			Time:            h.genDoc.GenesisTime,
 			ChainId:         h.genDoc.ChainID,
 			ConsensusParams: csParams,
-			Validators:      validators,
+			Validators:      nextVals,
 			AppStateBytes:   h.genDoc.AppState,
 		}
 		res, err := proxyApp.Consensus().InitChainSync(req)
@@ -280,15 +290,14 @@ func (h *Handshaker) ReplayBlocks(state sm.State, appHash []byte, appBlockHeight
 			return nil, err
 		}
 
-		// if the app returned validators
-		// or consensus params, update the state
-		// with the them
+		// If the app returned validators or consensus params, update the state.
 		if len(res.Validators) > 0 {
-			vals, err := types.PB2TM.Validators(res.Validators)
+			vals, err := types.PB2TM.ValidatorUpdates(res.Validators)
 			if err != nil {
 				return nil, err
 			}
 			state.Validators = types.NewValidatorSet(vals)
+			state.NextValidators = types.NewValidatorSet(vals)
 		}
 		if res.ConsensusParams != nil {
 			state.ConsensusParams = types.PB2TM.ConsensusParams(res.ConsensusParams)
@@ -296,7 +305,7 @@ func (h *Handshaker) ReplayBlocks(state sm.State, appHash []byte, appBlockHeight
 		sm.SaveState(h.stateDB, state)
 	}
 
-	// First handle edge cases and constraints on the storeBlockHeight
+	// First handle edge cases and constraints on the storeBlockHeight.
 	if storeBlockHeight == 0 {
 		return appHash, checkAppHash(state, appHash)
 
@@ -306,11 +315,11 @@ func (h *Handshaker) ReplayBlocks(state sm.State, appHash []byte, appBlockHeight
 
 	} else if storeBlockHeight < stateBlockHeight {
 		// the state should never be ahead of the store (this is under tendermint's control)
-		cmn.PanicSanity(cmn.Fmt("StateBlockHeight (%d) > StoreBlockHeight (%d)", stateBlockHeight, storeBlockHeight))
+		cmn.PanicSanity(fmt.Sprintf("StateBlockHeight (%d) > StoreBlockHeight (%d)", stateBlockHeight, storeBlockHeight))
 
 	} else if storeBlockHeight > stateBlockHeight+1 {
 		// store should be at most one ahead of the state (this is under tendermint's control)
-		cmn.PanicSanity(cmn.Fmt("StoreBlockHeight (%d) > StateBlockHeight + 1 (%d)", storeBlockHeight, stateBlockHeight+1))
+		cmn.PanicSanity(fmt.Sprintf("StoreBlockHeight (%d) > StateBlockHeight + 1 (%d)", storeBlockHeight, stateBlockHeight+1))
 	}
 
 	var err error

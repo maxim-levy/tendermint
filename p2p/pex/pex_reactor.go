@@ -31,8 +31,7 @@ const (
 	maxMsgSize = maxAddressSize * maxGetSelection
 
 	// ensure we have enough peers
-	defaultEnsurePeersPeriod   = 30 * time.Second
-	defaultMinNumOutboundPeers = p2p.DefaultMinNumOutboundPeers
+	defaultEnsurePeersPeriod = 30 * time.Second
 
 	// Seed/Crawler constants
 
@@ -222,7 +221,11 @@ func (r *PEXReactor) Receive(chID byte, src Peer, msgBytes []byte) {
 		// 2) limit the output size
 		if r.config.SeedMode {
 			r.SendAddrs(src, r.book.GetSelectionWithBias(biasToSelectNewPeers))
-			r.Switch.StopPeerGracefully(src)
+			go func() {
+				// TODO Fix properly #2092
+				time.Sleep(time.Second * 5)
+				r.Switch.StopPeerGracefully(src)
+			}()
 		} else {
 			r.SendAddrs(src, r.book.GetSelection())
 		}
@@ -289,21 +292,37 @@ func (r *PEXReactor) RequestAddrs(p Peer) {
 func (r *PEXReactor) ReceiveAddrs(addrs []*p2p.NetAddress, src Peer) error {
 	id := string(src.ID())
 	if !r.requestsSent.Has(id) {
-		return cmn.NewError("Received unsolicited pexAddrsMessage")
+		return errors.New("Unsolicited pexAddrsMessage")
 	}
 	r.requestsSent.Delete(id)
 
 	srcAddr := src.NodeInfo().NetAddress()
 	for _, netAddr := range addrs {
-		// NOTE: GetSelection methods should never return nil addrs
+		// Validate netAddr. Disconnect from a peer if it sends us invalid data.
 		if netAddr == nil {
-			return cmn.NewError("received nil addr")
+			return errors.New("nil address in pexAddrsMessage")
+		}
+		// TODO: extract validating logic from NewNetAddressStringWithOptionalID
+		// and put it in netAddr#Valid (#2722)
+		na, err := p2p.NewNetAddressString(netAddr.String())
+		if err != nil {
+			return fmt.Errorf("%s address in pexAddrsMessage is invalid: %v",
+				netAddr.String(),
+				err,
+			)
 		}
 
-		err := r.book.AddAddress(netAddr, srcAddr)
-		r.logErrAddrBook(err)
+		// NOTE: we check netAddr validity and routability in book#AddAddress.
+		err = r.book.AddAddress(na, srcAddr)
+		if err != nil {
+			r.logErrAddrBook(err)
+			// XXX: should we be strict about incoming data and disconnect from a
+			// peer here too?
+			continue
+		}
 
-		// If this address came from a seed node, try to connect to it without waiting.
+		// If this address came from a seed node, try to connect to it without
+		// waiting.
 		for _, seedAddr := range r.seedAddrs {
 			if seedAddr.Equals(srcAddr) {
 				r.ensurePeers()
@@ -362,7 +381,7 @@ func (r *PEXReactor) ensurePeersRoutine() {
 func (r *PEXReactor) ensurePeers() {
 	var (
 		out, in, dial = r.Switch.NumPeers()
-		numToDial     = defaultMinNumOutboundPeers - (out + dial)
+		numToDial     = r.Switch.MaxNumOutboundPeers() - (out + dial)
 	)
 	r.Logger.Info(
 		"Ensure peers",
@@ -393,10 +412,7 @@ func (r *PEXReactor) ensurePeers() {
 		if _, selected := toDial[try.ID]; selected {
 			continue
 		}
-		if dialling := r.Switch.IsDialing(try.ID); dialling {
-			continue
-		}
-		if connected := r.Switch.Peers().Has(try.ID); connected {
+		if r.Switch.IsDialingOrExistingAddress(try) {
 			continue
 		}
 		// TODO: consider moving some checks from toDial into here

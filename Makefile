@@ -1,15 +1,17 @@
 GOTOOLS = \
 	github.com/mitchellh/gox \
 	github.com/golang/dep/cmd/dep \
-	gopkg.in/alecthomas/gometalinter.v2 \
+	github.com/alecthomas/gometalinter \
 	github.com/gogo/protobuf/protoc-gen-gogo \
-	github.com/gogo/protobuf/gogoproto \
 	github.com/square/certstrap
+GOBIN?=${GOPATH}/bin
 PACKAGES=$(shell go list ./...)
 
 INCLUDE = -I=. -I=${GOPATH}/src -I=${GOPATH}/src/github.com/gogo/protobuf/protobuf
 BUILD_TAGS?='tendermint'
 BUILD_FLAGS = -ldflags "-X github.com/tendermint/tendermint/version.GitCommit=`git rev-parse --short=8 HEAD`"
+
+LINT_FLAGS = --exclude '.*\.pb\.go' --exclude 'vendor/*' --vendor --deadline=600s
 
 all: check build test install
 
@@ -22,29 +24,35 @@ check: check_tools get_vendor_deps
 build:
 	CGO_ENABLED=0 go build $(BUILD_FLAGS) -tags $(BUILD_TAGS) -o build/tendermint ./cmd/tendermint/
 
+build_c:
+	CGO_ENABLED=1 go build $(BUILD_FLAGS) -tags "$(BUILD_TAGS) gcc" -o build/tendermint ./cmd/tendermint/
+
 build_race:
 	CGO_ENABLED=0 go build -race $(BUILD_FLAGS) -tags $(BUILD_TAGS) -o build/tendermint ./cmd/tendermint
 
 install:
-	CGO_ENABLED=0 go install $(BUILD_FLAGS) -tags $(BUILD_TAGS) ./cmd/tendermint
+	CGO_ENABLED=0 go install  $(BUILD_FLAGS) -tags $(BUILD_TAGS) ./cmd/tendermint
 
 ########################################
 ### Protobuf
 
-protoc_all: protoc_libs protoc_abci protoc_grpc
+protoc_all: protoc_libs protoc_merkle protoc_abci protoc_grpc protoc_proto3types
 
 %.pb.go: %.proto
 	## If you get the following error,
 	## "error while loading shared libraries: libprotobuf.so.14: cannot open shared object file: No such file or directory"
 	## See https://stackoverflow.com/a/25518702
+	## Note the $< here is substituted for the %.proto
+	## Note the $@ here is substituted for the %.pb.go
 	protoc $(INCLUDE) $< --gogo_out=Mgoogle/protobuf/timestamp.proto=github.com/golang/protobuf/ptypes/timestamp,plugins=grpc:.
-	@echo "--> adding nolint declarations to protobuf generated files"
-	@awk -i inplace '/^\s*package \w+/ { print "//nolint" }1' $@
 
 ########################################
 ### Build ABCI
 
+# see protobuf section above
 protoc_abci: abci/types/types.pb.go
+
+protoc_proto3types: types/proto3/block.pb.go
 
 build_abci:
 	@go build -i ./abci/cmd/...
@@ -70,12 +78,13 @@ check_tools:
 
 get_tools:
 	@echo "--> Installing tools"
-	go get -u -v $(GOTOOLS)
-	@gometalinter.v2 --install
+	./scripts/get_tools.sh
+	@echo "--> Downloading linters (this may take awhile)"
+	$(GOPATH)/src/github.com/alecthomas/gometalinter/scripts/install.sh -b $(GOBIN)
 
 update_tools:
 	@echo "--> Updating tools"
-	@go get -u $(GOTOOLS)
+	./scripts/get_tools.sh
 
 #Update dependencies
 get_vendor_deps:
@@ -85,13 +94,15 @@ get_vendor_deps:
 #For ABCI and libs
 get_protoc:
 	@# https://github.com/google/protobuf/releases
-	curl -L https://github.com/google/protobuf/releases/download/v3.4.1/protobuf-cpp-3.4.1.tar.gz | tar xvz && \
-		cd protobuf-3.4.1 && \
+	curl -L https://github.com/google/protobuf/releases/download/v3.6.1/protobuf-cpp-3.6.1.tar.gz | tar xvz && \
+		cd protobuf-3.6.1 && \
 		DIST_LANG=cpp ./configure && \
 		make && \
-		make install && \
+		make check && \
+		sudo make install && \
+		sudo ldconfig && \
 		cd .. && \
-		rm -rf protobuf-3.4.1
+		rm -rf protobuf-3.6.1
 
 draw_deps:
 	@# requires brew install graphviz or apt-get install graphviz
@@ -129,6 +140,8 @@ grpc_dbserver:
 	protoc -I db/remotedb/proto/ db/remotedb/proto/defs.proto --go_out=plugins=grpc:db/remotedb/proto
 
 protoc_grpc: rpc/grpc/types.pb.go
+
+protoc_merkle: crypto/merkle/merkle.pb.go
 
 ########################################
 ### Testing
@@ -173,6 +186,9 @@ test_p2p:
 	cd ..
 	# requires 'tester' the image from above
 	bash test/p2p/test.sh tester
+	# the `docker cp` takes a really long time; uncomment for debugging
+	#
+	# mkdir -p test/p2p/logs && docker cp rsyslog:/var/log test/p2p/logs
 
 test_integrations:
 	make build_docker_test_image
@@ -200,11 +216,11 @@ vagrant_test:
 ### go tests
 test:
 	@echo "--> Running go test"
-	@GOCACHE=off go test $(PACKAGES)
+	@GOCACHE=off go test -p 1 $(PACKAGES)
 
 test_race:
 	@echo "--> Running go test --race"
-	@go test -v -race $(PACKAGES)
+	@GOCACHE=off go test -p 1 -v -race $(PACKAGES)
 
 
 ########################################
@@ -215,7 +231,7 @@ fmt:
 
 metalinter:
 	@echo "--> Running linter"
-	@gometalinter.v2 --vendor --deadline=600s --disable-all  \
+	@gometalinter $(LINT_FLAGS) --disable-all  \
 		--enable=deadcode \
 		--enable=gosimple \
 	 	--enable=misspell \
@@ -244,7 +260,7 @@ metalinter:
 
 metalinter_all:
 	@echo "--> Running linter (all)"
-	gometalinter.v2 --vendor --deadline=600s --enable-all --disable=lll ./...
+	gometalinter $(LINT_FLAGS) --enable-all --disable=lll ./...
 
 DESTINATION = ./index.html.md
 
